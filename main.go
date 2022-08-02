@@ -42,7 +42,7 @@ func main() {
 	var lastSuccess time.Time
 
 	type readerFunc func(client modbus.Client, mqttClient mqtt.Client, topic string) error
-	funcs := []readerFunc{readPvPower, readBatteryCharge, readBatteryDischarge, readBatteryVoltage, readBatteryCapacity}
+	funcs := []readerFunc{readPvPower, readBatteryCharge, readBatteryDischarge, readBatteryVoltage, readBatteryCapacity, readInverterPower}
 
 	for {
 		for _, fn := range funcs {
@@ -98,6 +98,15 @@ func wordToUint16(regBytes []byte) uint16 {
 	return result
 }
 
+func wordToInt16(regBytes []byte) int16 {
+	var result int16
+
+	result = int16(regBytes[1]) & 0xff
+	result |= int16(regBytes[0]) << 8
+
+	return result
+}
+
 func readHundredsWhValue(client modbus.Client, mqttClient mqtt.Client, topic string, reg uint16) error {
 	results, err := client.ReadHoldingRegisters(reg, 2)
 	if err != nil {
@@ -143,6 +152,25 @@ func readBatteryCapacity(client modbus.Client, mqttClient mqtt.Client, topic str
 
 	pct := wordToUint16(results)
 	mqttClient.Publish(topic+"/battery_capacity_pct", 0, true, fmt.Sprint(pct)).Wait()
+
+	return nil
+}
+
+func readInverterPower(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegInverterOutputPower1, 4)
+	if err != nil {
+		return err
+	}
+
+	log.Println("Inverter power:", results)
+
+	for i := 1; i <= 3; i++ {
+		watts := wordToInt16(results[i*2-2 : i*2])
+		mqttClient.Publish(fmt.Sprint(topic, "/pv_power_l", i), 0, true, fmt.Sprint(watts)).Wait()
+	}
+
+	totalWatts := wordToInt16(results[6:])
+	mqttClient.Publish(topic+"/pv_power_all", 0, true, fmt.Sprint(totalWatts)).Wait()
 
 	return nil
 }
@@ -248,4 +276,24 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 
 	jsonBytes, _ = json.Marshal(&autoconf)
 	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/battery_capacity_pct/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	for i := 1; i <= 3; i++ {
+		autoconf.Name = fmt.Sprint("pv_power_l", i)
+		autoconf.DeviceClass = "power"
+		autoconf.StateClass = "measurement"
+		autoconf.UnitOfMeasurement = "W"
+		autoconf.StatusTopic = topic + "/" + autoconf.Name
+		autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+
+		jsonBytes, _ = json.Marshal(&autoconf)
+		mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+	}
+
+	autoconf.Name = "pw_power_all"
+	autoconf.StatusTopic = topic + "/" + autoconf.Name
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
 }

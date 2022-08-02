@@ -12,4 +12,9 @@ const (
 
 	RegBatteryVoltage  uint16 = 587
 	RegBatteryCapacity uint16 = 588
+
+	RegInverterOutputPower1     uint16 = 633
+	RegInverterOutputPower2     uint16 = 634
+	RegInverterOutputPower3     uint16 = 635
+	RegInverterOutputPowerTotal uint16 = 636
 )
