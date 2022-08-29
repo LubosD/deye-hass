@@ -114,6 +114,14 @@ func readHundredsWhValue(client modbus.Client, mqttClient mqtt.Client, topic str
 	}
 
 	value := uint64(lowHighToUint(results)) * 100 // convert from 0.1 kWh to Wh
+
+	if value == 0 {
+		// The inverter sometimes send zero values at startup,
+		// which messes up stats in Home Assistant
+		log.Println("Not publishing 0 value to topic", topic)
+		return nil
+	}
+
 	log.Println("Going to publish to topic", topic, value)
 	mqttClient.Publish(topic, 0, true, fmt.Sprint(value)).Wait()
 
@@ -161,8 +169,6 @@ func readInverterPower(client modbus.Client, mqttClient mqtt.Client, topic strin
 	if err != nil {
 		return err
 	}
-
-	log.Println("Inverter power:", results)
 
 	for i := 1; i <= 3; i++ {
 		watts := wordToInt16(results[i*2-2 : i*2])

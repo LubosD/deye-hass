@@ -6,11 +6,12 @@ Based on Modbus register documentation saved in [this file](modbus_deye.docx).
 
 ## Provided Data
 
-* Total PV power
+* Total PV energy
 * Total battery charge
 * Total battery discharge
 * Battery voltage
 * Battery capacity (%)
+* Per-phase and sum of current power from inverter
 
 ## Usage
 
