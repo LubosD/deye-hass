@@ -43,7 +43,8 @@ func main() {
 
 	type readerFunc func(client modbus.Client, mqttClient mqtt.Client, topic string) error
 	funcs := []readerFunc{readPvPower, readBatteryCharge, readBatteryDischarge, readBatteryVoltage,
-		readBatteryCapacity, readBatteryPower, readLoadPower, readInverterPower, readBackupLoadPower}
+		readBatteryCapacity, readBatteryPower, readLoadPower, readInverterPower, readBackupLoadPower,
+		readGridPower}
 
 	for {
 		for _, fn := range funcs {
@@ -197,6 +198,18 @@ func readBackupLoadPower(client modbus.Client, mqttClient mqtt.Client, topic str
 
 	value := float32(wordToUint16(results))
 	mqttClient.Publish(topic+"/backup_load_power", 0, true, fmt.Sprint(value)).Wait()
+
+	return nil
+}
+
+func readGridPower(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegGridPowerTotal, 1)
+	if err != nil {
+		return err
+	}
+
+	value := float32(wordToInt16(results))
+	mqttClient.Publish(topic+"/grid_power", 0, true, fmt.Sprint(value)).Wait()
 
 	return nil
 }
@@ -359,6 +372,14 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 	///
 
 	autoconf.Name = "backup_load_power"
+	autoconf.StatusTopic = topic + "/" + autoconf.Name
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	autoconf.Name = "grid_power"
 	autoconf.StatusTopic = topic + "/" + autoconf.Name
 	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
 	jsonBytes, _ = json.Marshal(&autoconf)
