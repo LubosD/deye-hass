@@ -42,7 +42,8 @@ func main() {
 	var lastSuccess time.Time
 
 	type readerFunc func(client modbus.Client, mqttClient mqtt.Client, topic string) error
-	funcs := []readerFunc{readPvPower, readBatteryCharge, readBatteryDischarge, readBatteryVoltage, readBatteryCapacity, readInverterPower}
+	funcs := []readerFunc{readPvPower, readBatteryCharge, readBatteryDischarge, readBatteryVoltage,
+		readBatteryCapacity, readBatteryPower, readLoadPower, readInverterPower, readBackupLoadPower}
 
 	for {
 		for _, fn := range funcs {
@@ -160,6 +161,42 @@ func readBatteryCapacity(client modbus.Client, mqttClient mqtt.Client, topic str
 
 	pct := wordToUint16(results)
 	mqttClient.Publish(topic+"/battery_capacity_pct", 0, true, fmt.Sprint(pct)).Wait()
+
+	return nil
+}
+
+func readBatteryPower(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegBatteryPower, 1)
+	if err != nil {
+		return err
+	}
+
+	value := float32(wordToInt16(results))
+	mqttClient.Publish(topic+"/battery_power", 0, true, fmt.Sprint(value)).Wait()
+
+	return nil
+}
+
+func readLoadPower(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegLoadPowerTotal, 1)
+	if err != nil {
+		return err
+	}
+
+	value := float32(wordToUint16(results))
+	mqttClient.Publish(topic+"/load_power", 0, true, fmt.Sprint(value)).Wait()
+
+	return nil
+}
+
+func readBackupLoadPower(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegBackupLoadPowerTotal, 1)
+	if err != nil {
+		return err
+	}
+
+	value := float32(wordToUint16(results))
+	mqttClient.Publish(topic+"/backup_load_power", 0, true, fmt.Sprint(value)).Wait()
 
 	return nil
 }
@@ -297,7 +334,31 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 		mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
 	}
 
-	autoconf.Name = "pw_power_all"
+	autoconf.Name = "pv_power_all"
+	autoconf.StatusTopic = topic + "/" + autoconf.Name
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	autoconf.Name = "battery_power"
+	autoconf.StatusTopic = topic + "/" + autoconf.Name
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	autoconf.Name = "load_power"
+	autoconf.StatusTopic = topic + "/" + autoconf.Name
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	autoconf.Name = "backup_load_power"
 	autoconf.StatusTopic = topic + "/" + autoconf.Name
 	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
 	jsonBytes, _ = json.Marshal(&autoconf)
