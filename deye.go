@@ -4,6 +4,11 @@ const (
 	RegTotalPvPowerLow  uint16 = 534
 	RegTotalPvPowerHigh uint16 = 535
 
+	RegTotalGridBuyLow   uint16 = 522
+	RegTotalGridBuyHigh  uint16 = 523
+	RegTotalGridSellLow  uint16 = 524
+	RegTotalGridSellHigh uint16 = 525
+
 	RegTotalBatteryChargeLow  uint16 = 516
 	RegTotalBatteryChargeHigh uint16 = 517
 

@@ -44,7 +44,7 @@ func main() {
 	type readerFunc func(client modbus.Client, mqttClient mqtt.Client, topic string) error
 	funcs := []readerFunc{readPvPower, readBatteryCharge, readBatteryDischarge, readBatteryVoltage,
 		readBatteryCapacity, readBatteryPower, readLoadPower, readInverterPower, readBackupLoadPower,
-		readGridPower}
+		readGridPower, readGridBuy, readGridSell}
 
 	for {
 		for _, fn := range funcs {
@@ -140,6 +140,14 @@ func readBatteryCharge(client modbus.Client, mqttClient mqtt.Client, topic strin
 
 func readBatteryDischarge(client modbus.Client, mqttClient mqtt.Client, topic string) error {
 	return readHundredsWhValue(client, mqttClient, topic+"/total_battery_discharge", RegTotalBatteryDischargeLow)
+}
+
+func readGridBuy(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	return readHundredsWhValue(client, mqttClient, topic+"/total_grid_buy", RegTotalGridBuyLow)
+}
+
+func readGridSell(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	return readHundredsWhValue(client, mqttClient, topic+"/total_grid_sell", RegTotalGridSellLow)
 }
 
 func readBatteryVoltage(client modbus.Client, mqttClient mqtt.Client, topic string) error {
@@ -309,6 +317,24 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 
 	jsonBytes, _ = json.Marshal(&autoconf)
 	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/total_battery_discharge/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	autoconf.Name = "total_grid_buy"
+	autoconf.StatusTopic = topic + "/total_grid_buy"
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/total_grid_buy/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	autoconf.Name = "total_grid_sell"
+	autoconf.StatusTopic = topic + "/total_grid_sell"
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/total_grid_sell/config", 0, true, string(jsonBytes)).Wait()
 
 	///
 
