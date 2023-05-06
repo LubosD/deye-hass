@@ -29,3 +29,8 @@ const (
 	RegBackupLoadPowerTotal uint16 = 643
 	RegLoadPowerTotal       uint16 = 653
 )
+
+const (
+	RegPowerEnable    uint16 = 80
+	RegSolarSellPower uint16 = 340
+)

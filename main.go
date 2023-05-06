@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -13,6 +15,7 @@ import (
 )
 
 var isReplying = false
+var mutex sync.Mutex
 
 func main() {
 	portPtr := flag.String("port", "/dev/ttyUSB0", "Path to your RS485 device")
@@ -44,15 +47,26 @@ func main() {
 	type readerFunc func(client modbus.Client, mqttClient mqtt.Client, topic string) error
 	funcs := []readerFunc{readPvPower, readBatteryCharge, readBatteryDischarge, readBatteryVoltage,
 		readBatteryCapacity, readBatteryPower, readLoadPower, readInverterPower, readBackupLoadPower,
-		readGridPower, readGridBuy, readGridSell}
+		readGridPower, readGridBuy, readGridSell, readSolarSellPower}
+
+	mqttClient.Subscribe(*topicPtr+"/max_solar_sell_power_set", 0, func(mc mqtt.Client, message mqtt.Message) {
+		handleSetSolarSellPower(mc, message, client)
+	})
+
+	// mqttClient.Subscribe(*topicPtr+"/power_enable", 0, func(mc mqtt.Client, message mqtt.Message) {
+	//	handlePowerEnable(mc, message, client)
+	//})
 
 	for {
 		for _, fn := range funcs {
+			mutex.Lock()
 			err := fn(client, mqttClient, *topicPtr)
+			mutex.Unlock()
 			if err != nil {
 				log.Println("Error reading data:", err)
 			} else {
 				lastSuccess = time.Now()
+				// time.Sleep(250 * time.Millisecond)
 			}
 		}
 
@@ -74,7 +88,7 @@ func main() {
 			}
 		}
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -89,6 +103,15 @@ func lowHighToUint(regBytes []byte) uint32 {
 	result |= uint32(regBytes[2]) << 24
 
 	return result
+}
+
+func uint16ToWord(value uint16) []byte {
+	var result [2]byte
+
+	result[1] = byte(value & 0xff)
+	result[0] = byte(value >> 8)
+
+	return result[:]
 }
 
 func wordToUint16(regBytes []byte) uint16 {
@@ -148,6 +171,18 @@ func readGridBuy(client modbus.Client, mqttClient mqtt.Client, topic string) err
 
 func readGridSell(client modbus.Client, mqttClient mqtt.Client, topic string) error {
 	return readHundredsWhValue(client, mqttClient, topic+"/total_grid_sell", RegTotalGridSellLow)
+}
+
+func readSolarSellPower(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegSolarSellPower, 1)
+	if err != nil {
+		return err
+	}
+
+	pct := wordToUint16(results)
+	mqttClient.Publish(topic+"/max_solar_sell_power", 0, true, fmt.Sprint(pct)).Wait()
+
+	return nil
 }
 
 func readBatteryVoltage(client modbus.Client, mqttClient mqtt.Client, topic string) error {
@@ -271,10 +306,17 @@ type HassAutoconfig struct {
 	UnitOfMeasurement string               `json:"unit_of_meas"`
 	Name              string               `json:"name"`
 	StatusTopic       string               `json:"stat_t"`
+	CommandTopic      string               `json:"cmd_t,omitempty"`
 	AvailabilityTopic string               `json:"avty_t"`
 	UniqueID          string               `json:"uniq_id"`
 	StateClass        string               `json:"stat_cla"`
 	Device            HassAutoconfigDevice `json:"dev"`
+	Min               *int                 `json:"min,omitempty"`
+	Max               *int                 `json:"max,omitempty"`
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 type HassAutoconfigDevice struct {
@@ -373,6 +415,22 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 		mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
 	}
 
+	///
+
+	autoconf.Name = "max_solar_sell_power"
+	autoconf.StatusTopic = topic + "/" + autoconf.Name
+	autoconf.CommandTopic = autoconf.StatusTopic + "_set"
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+	autoconf.Max = intPtr(20000)
+	autoconf.Min = intPtr(0)
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/number/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+	autoconf.CommandTopic = ""
+	autoconf.Min = nil
+	autoconf.Max = nil
+
+	///
+
 	autoconf.Name = "pv_power_all"
 	autoconf.StatusTopic = topic + "/" + autoconf.Name
 	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
@@ -411,3 +469,48 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 	jsonBytes, _ = json.Marshal(&autoconf)
 	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
 }
+
+func handleSetSolarSellPower(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
+	text := string(message.Payload())
+	value, err := strconv.Atoi(text)
+
+	if err != nil {
+		log.Println("handleSetSolarSellPower: Invalid value:", err)
+		return
+	}
+
+	mutex.Lock()
+	_, err = modbusClient.WriteMultipleRegisters(RegSolarSellPower, 1, uint16ToWord(uint16(value)))
+	//_, err = modbusClient.WriteSingleRegister(RegSolarSellPower, uint16(value))
+	mutex.Unlock()
+
+	if err != nil {
+		log.Println("handleSetSolarSellPower: Error writing register:", err)
+	} else {
+		log.Println("handleSetSolarSellPower: write OK")
+	}
+}
+
+/*
+func handlePowerEnable(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
+	var err error
+	text := string(message.Payload())
+
+	switch text {
+	case "1":
+		fallthrough
+	case "on":
+		_, err = modbusClient.WriteSingleRegister(RegPowerEnable, 1)
+	case "0":
+		fallthrough
+	case "off":
+		_, err = modbusClient.WriteSingleRegister(RegPowerEnable, 0)
+	}
+
+	if err != nil {
+		log.Println("handlePowerEnable error:", err)
+	} else {
+		log.Println("handlePowerEnable OK")
+	}
+}
+*/
