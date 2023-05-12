@@ -31,6 +31,22 @@ const (
 )
 
 const (
-	RegPowerEnable    uint16 = 80
-	RegSolarSellPower uint16 = 340
+	RegPowerEnable           uint16 = 80
+	RegSolarSellPower        uint16 = 340
+	RegEnergyManagementModel uint16 = 141
+	RegLimitControlFunction  uint16 = 142
+	RegSolarSell             uint16 = 145
+)
+
+// RegLimitControlFunction
+const (
+	ModeSellingFirst     uint16 = 0
+	ModeZeroExportToLoad uint16 = 1
+	ModeZeroExportToCT   uint16 = 2
+)
+
+// RegEnergyManagementModel
+const (
+	ManagementBatteryFirst uint16 = 2
+	ManagementLoadFirst    uint16 = 3
 )
