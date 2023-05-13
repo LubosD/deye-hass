@@ -58,10 +58,11 @@ func main() {
 		readUint("backup_load_power", RegBackupLoadPowerTotal),
 		readUint("load_power", RegLoadPowerTotal),
 		readInt("grid_power", RegGridPowerTotal),
+		readBool("solar_sell", RegSolarSell),
+		readBool("grid_charge", RegGridCharge),
 		readBatteryVoltage,
 		readInverterPower,
 		readInverterMode,
-		readSolarSell,
 	}
 
 	mqttClient.Subscribe(*topicPtr+"/max_solar_sell_power_set", 0, func(mc mqtt.Client, message mqtt.Message) {
@@ -72,9 +73,8 @@ func main() {
 		handleSetInverterMode(mc, message, client)
 	})
 
-	mqttClient.Subscribe(*topicPtr+"/solar_sell_set", 0, func(mc mqtt.Client, message mqtt.Message) {
-		handleSetSolarSell(mc, message, client)
-	})
+	handleWriteBool(client, mqttClient, *topicPtr+"/solar_sell_set", RegSolarSell)
+	handleWriteBool(client, mqttClient, *topicPtr+"/grid_charge_set", RegGridCharge)
 
 	// mqttClient.Subscribe(*topicPtr+"/power_enable", 0, func(mc mqtt.Client, message mqtt.Message) {
 	//	handlePowerEnable(mc, message, client)
@@ -115,6 +115,36 @@ func main() {
 
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+func handleWriteBool(client modbus.Client, mqttClient mqtt.Client, topic string, reg uint16) {
+	mqttClient.Subscribe(topic, 0, func(mc mqtt.Client, message mqtt.Message) {
+		defer message.Ack()
+
+		text := string(message.Payload())
+
+		var value uint16
+
+		switch strings.ToLower(text) {
+		case "on":
+			value = 1
+		case "off":
+			value = 0
+		default:
+			log.Println(topic + ": Invalid value: " + text)
+			return
+		}
+
+		mutex.Lock()
+		_, err := client.WriteMultipleRegisters(reg, 1, uint16ToWord(value))
+		mutex.Unlock()
+
+		if err != nil {
+			log.Println(topic+": Error writing register:", err)
+		} else {
+			log.Println(topic + ": write OK")
+		}
+	})
 }
 
 func lowHighToUint(regBytes []byte) uint32 {
@@ -212,6 +242,28 @@ func readInt(subtopic string, reg uint16) func(client modbus.Client, mqttClient 
 	}
 }
 
+func readBool(subtopic string, reg uint16) func(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	return func(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+		results, err := client.ReadHoldingRegisters(reg, 1)
+		if err != nil {
+			return err
+		}
+
+		value := wordToUint16(results)
+		var valueStr string
+
+		if value == 0 {
+			valueStr = "OFF"
+		} else {
+			valueStr = "ON"
+		}
+
+		mqttClient.Publish(topic+"/"+subtopic, 0, true, valueStr).Wait()
+
+		return nil
+	}
+}
+
 func readBatteryVoltage(client modbus.Client, mqttClient mqtt.Client, topic string) error {
 	results, err := client.ReadHoldingRegisters(RegBatteryVoltage, 1)
 	if err != nil {
@@ -245,26 +297,6 @@ func readInverterMode(client modbus.Client, mqttClient mqtt.Client, topic string
 	}
 
 	mqttClient.Publish(topic+"/inverter_mode", 0, true, valueStr).Wait()
-
-	return nil
-}
-
-func readSolarSell(client modbus.Client, mqttClient mqtt.Client, topic string) error {
-	results, err := client.ReadHoldingRegisters(RegSolarSell, 1)
-	if err != nil {
-		return err
-	}
-
-	value := wordToUint16(results)
-	var valueStr string
-
-	if value == 0 {
-		valueStr = "OFF"
-	} else {
-		valueStr = "ON"
-	}
-
-	mqttClient.Publish(topic+"/solar_sell", 0, true, valueStr).Wait()
 
 	return nil
 }
@@ -516,9 +548,24 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 	}
 	jsonBytes, _ = json.Marshal(&solarSellSwitch)
 	mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+solarSellSwitch.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	gridChargeSwitch := HassAutoconfig{
+		Device:            autoconf.Device,
+		Name:              "grid_charge",
+		AvailabilityTopic: topic + "/status",
+		StatusTopic:       topic + "/grid_charge",
+		CommandTopic:      topic + "/grid_charge_set",
+		UniqueID:          fmt.Sprint(topic, ".", hostname, ".grid_charge"),
+	}
+	jsonBytes, _ = json.Marshal(&gridChargeSwitch)
+	mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+gridChargeSwitch.Name+"/config", 0, true, string(jsonBytes)).Wait()
 }
 
 func handleSetSolarSellPower(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
+	defer message.Ack()
+
 	text := string(message.Payload())
 	value, err := strconv.Atoi(text)
 
@@ -540,6 +587,8 @@ func handleSetSolarSellPower(client mqtt.Client, message mqtt.Message, modbusCli
 }
 
 func handleSetInverterMode(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
+	defer message.Ack()
+
 	text := string(message.Payload())
 	var modeValue uint16
 
@@ -567,6 +616,8 @@ func handleSetInverterMode(client mqtt.Client, message mqtt.Message, modbusClien
 }
 
 func handleSetSolarSell(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
+	defer message.Ack()
+
 	text := string(message.Payload())
 
 	var value uint16
