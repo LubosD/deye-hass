@@ -27,9 +27,6 @@ func main() {
 
 	flag.Parse()
 
-	mqttClient := connectMqtt(*mqttServerPtr, *topicPtr)
-	pushHomeAssistantConfig(mqttClient, *topicPtr)
-
 	handler := modbus.NewRTUClientHandler(*portPtr)
 	handler.BaudRate = *baudRatePtr
 	handler.DataBits = 8
@@ -42,6 +39,9 @@ func main() {
 	defer handler.Close()
 
 	client := modbus.NewClient(handler)
+
+	mqttClient := connectMqtt(*mqttServerPtr, *topicPtr, client)
+	pushHomeAssistantConfig(mqttClient, *topicPtr)
 
 	var lastSuccess time.Time
 
@@ -64,17 +64,6 @@ func main() {
 		readInverterPower,
 		readInverterMode,
 	}
-
-	mqttClient.Subscribe(*topicPtr+"/max_solar_sell_power_set", 0, func(mc mqtt.Client, message mqtt.Message) {
-		handleSetSolarSellPower(mc, message, client)
-	})
-
-	mqttClient.Subscribe(*topicPtr+"/inverter_mode_set", 0, func(mc mqtt.Client, message mqtt.Message) {
-		handleSetInverterMode(mc, message, client)
-	})
-
-	handleWriteBool(client, mqttClient, *topicPtr+"/solar_sell_set", RegSolarSell)
-	handleWriteBool(client, mqttClient, *topicPtr+"/grid_charge_set", RegGridCharge)
 
 	// mqttClient.Subscribe(*topicPtr+"/power_enable", 0, func(mc mqtt.Client, message mqtt.Message) {
 	//	handlePowerEnable(mc, message, client)
@@ -117,6 +106,19 @@ func main() {
 	}
 }
 
+func subscribeTopics(client modbus.Client, mqttClient mqtt.Client, topic string) {
+	mqttClient.Subscribe(topic+"/max_solar_sell_power_set", 0, func(mc mqtt.Client, message mqtt.Message) {
+		handleSetSolarSellPower(mc, message, client)
+	}).Wait()
+
+	mqttClient.Subscribe(topic+"/inverter_mode_set", 0, func(mc mqtt.Client, message mqtt.Message) {
+		handleSetInverterMode(mc, message, client)
+	}).Wait()
+
+	handleWriteBool(client, mqttClient, topic+"/solar_sell_set", RegSolarSell)
+	handleWriteBool(client, mqttClient, topic+"/grid_charge_set", RegGridCharge)
+}
+
 func handleWriteBool(client modbus.Client, mqttClient mqtt.Client, topic string, reg uint16) {
 	mqttClient.Subscribe(topic, 0, func(mc mqtt.Client, message mqtt.Message) {
 		defer message.Ack()
@@ -144,7 +146,7 @@ func handleWriteBool(client modbus.Client, mqttClient mqtt.Client, topic string,
 		} else {
 			log.Println(topic + ": write OK")
 		}
-	})
+	}).Wait()
 }
 
 func lowHighToUint(regBytes []byte) uint32 {
@@ -318,11 +320,17 @@ func readInverterPower(client modbus.Client, mqttClient mqtt.Client, topic strin
 	return nil
 }
 
-func connectMqtt(address, topic string) mqtt.Client {
-	opts := mqtt.NewClientOptions().AddBroker(address).SetClientID("hass_deye")
-	opts.SetKeepAlive(2 * time.Second)
-	opts.SetPingTimeout(1 * time.Second)
-	opts.SetWill(topic+"/status", "offline", 0, true)
+func connectMqtt(address, topic string, modbusClient modbus.Client) mqtt.Client {
+	opts := mqtt.NewClientOptions().
+		AddBroker(address).
+		SetClientID("hass_deye").
+		SetKeepAlive(2*time.Second).
+		SetPingTimeout(1*time.Second).
+		SetWill(topic+"/status", "offline", 0, true).
+		SetAutoReconnect(true).
+		SetResumeSubs(true).
+		SetOrderMatters(false)
+
 	opts.OnConnect = func(client mqtt.Client) {
 		log.Println("MQTT connected")
 
@@ -332,6 +340,8 @@ func connectMqtt(address, topic string) mqtt.Client {
 		}
 
 		client.Publish(topic+"/status", 0, true, stateStr).Wait()
+
+		subscribeTopics(modbusClient, client, topic)
 	}
 	opts.OnConnectionLost = func(client mqtt.Client, err error) {
 		log.Println("MQTT connection lost:", err)
