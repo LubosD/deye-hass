@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +64,15 @@ func main() {
 		readBatteryVoltage,
 		readInverterPower,
 		readInverterMode,
+		readBatteryFirst,
+	}
+
+	for i := 0; i < 6; i++ {
+		funcs = append(funcs,
+			readTime(fmt.Sprint("schedule_time", i+1), RegScheduleTime1+uint16(i)),
+			readUint(fmt.Sprint("schedule_soc", i+1), RegScheduleSoC1+uint16(i)),
+			readChargeSchedule(i),
+		)
 	}
 
 	// mqttClient.Subscribe(*topicPtr+"/power_enable", 0, func(mc mqtt.Client, message mqtt.Message) {
@@ -115,8 +125,18 @@ func subscribeTopics(client modbus.Client, mqttClient mqtt.Client, topic string)
 		handleSetInverterMode(mc, message, client)
 	}).Wait()
 
+	mqttClient.Subscribe(topic+"/battery_first_set", 0, func(mc mqtt.Client, message mqtt.Message) {
+		handleSetBatteryFirst(mc, message, client)
+	}).Wait()
+
 	handleWriteBool(client, mqttClient, topic+"/solar_sell_set", RegSolarSell)
 	handleWriteBool(client, mqttClient, topic+"/grid_charge_set", RegGridCharge)
+
+	for i := 0; i < 6; i++ {
+		handleWriteUint(client, mqttClient, fmt.Sprint(topic, "/schedule_soc", i+1, "_set"), RegScheduleSoC1+uint16(i))
+		handleWriteTime(client, mqttClient, fmt.Sprint(topic, "/schedule_time", i+1, "_set"), RegScheduleTime1+uint16(i))
+		handleWriteChargeSchedule(client, mqttClient, topic, i)
+	}
 }
 
 func handleWriteBool(client modbus.Client, mqttClient mqtt.Client, topic string, reg uint16) {
@@ -147,6 +167,143 @@ func handleWriteBool(client modbus.Client, mqttClient mqtt.Client, topic string,
 			log.Println(topic + ": write OK")
 		}
 	}).Wait()
+}
+
+func handleWriteUint(client modbus.Client, mqttClient mqtt.Client, topic string, reg uint16) {
+	mqttClient.Subscribe(topic, 0, func(mc mqtt.Client, message mqtt.Message) {
+		defer message.Ack()
+
+		text := string(message.Payload())
+		value, err := strconv.ParseUint(text, 10, 16)
+
+		if err != nil {
+			log.Println(topic+": Invalid value: "+text, err)
+			return
+		}
+
+		mutex.Lock()
+		_, err = client.WriteMultipleRegisters(reg, 1, uint16ToWord(uint16(value)))
+		mutex.Unlock()
+
+		if err != nil {
+			log.Println(topic+": Error writing register:", err)
+		} else {
+			log.Println(topic + ": write OK")
+		}
+	}).Wait()
+}
+
+var reTime *regexp.Regexp = regexp.MustCompile(`^(\d\d):(\d\d)$`)
+
+func handleWriteTime(client modbus.Client, mqttClient mqtt.Client, topic string, reg uint16) {
+	mqttClient.Subscribe(topic, 0, func(mc mqtt.Client, message mqtt.Message) {
+		defer message.Ack()
+
+		text := string(message.Payload())
+		match := reTime.FindStringSubmatch(text)
+		if match == nil {
+			log.Println(topic + ": Invalid value: " + text)
+			return
+		}
+
+		hour, err := strconv.ParseUint(match[1], 10, 16)
+		if err != nil || hour > 23 {
+			log.Println(topic + ": Invalid value: " + text)
+			return
+		}
+
+		min, err := strconv.ParseUint(match[2], 10, 16)
+		if err != nil || min > 59 {
+			log.Println(topic + ": Invalid value: " + text)
+			return
+		}
+
+		value := uint16(hour*100 + min)
+
+		mutex.Lock()
+		_, err = client.WriteMultipleRegisters(reg, 1, uint16ToWord(uint16(value)))
+		mutex.Unlock()
+
+		if err != nil {
+			log.Println(topic+": Error writing register:", err)
+		} else {
+			log.Println(topic + ": write OK")
+		}
+	}).Wait()
+}
+
+func handleWriteChargeSchedule(client modbus.Client, mqttClient mqtt.Client, topic string, index int) {
+	fulltopic := fmt.Sprint(topic, "/schedule_grid_charge", index+1, "_set")
+
+	mqttClient.Subscribe(fulltopic, 0, func(mc mqtt.Client, message mqtt.Message) {
+		defer message.Ack()
+
+		var value uint8
+
+		text := string(message.Payload())
+
+		switch strings.ToLower(text) {
+		case "on":
+			value = 1
+		case "off":
+			value = 0
+		default:
+			log.Println(fulltopic + ": Invalid value: " + text)
+			return
+		}
+
+		value |= chargeScheduleData[index] & 2
+
+		mutex.Lock()
+		_, err := client.WriteMultipleRegisters(RegScheduleCharge1+uint16(index), 1, []byte{value})
+
+		if err == nil {
+			chargeScheduleData[index] = value
+		}
+		mutex.Unlock()
+
+		if err != nil {
+			log.Println(topic+": Error writing register:", err)
+		} else {
+			log.Println(topic + ": write OK")
+		}
+	})
+
+	fulltopicGen := fmt.Sprint(topic, "/schedule_gen_charge", index+1, "_set")
+
+	mqttClient.Subscribe(fulltopicGen, 0, func(mc mqtt.Client, message mqtt.Message) {
+		defer message.Ack()
+
+		var value uint8
+
+		text := string(message.Payload())
+
+		switch strings.ToLower(text) {
+		case "on":
+			value = 2
+		case "off":
+			value = 0
+		default:
+			log.Println(fulltopicGen + ": Invalid value: " + text)
+			return
+		}
+
+		value |= chargeScheduleData[index] & 1
+
+		mutex.Lock()
+		_, err := client.WriteMultipleRegisters(RegScheduleCharge1+uint16(index), 1, []byte{value})
+
+		if err == nil {
+			chargeScheduleData[index] = value
+		}
+		mutex.Unlock()
+
+		if err != nil {
+			log.Println(topic+": Error writing register:", err)
+		} else {
+			log.Println(topic + ": write OK")
+		}
+	})
 }
 
 func lowHighToUint(regBytes []byte) uint32 {
@@ -244,6 +401,50 @@ func readInt(subtopic string, reg uint16) func(client modbus.Client, mqttClient 
 	}
 }
 
+func readTime(subtopic string, reg uint16) func(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	return func(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+		results, err := client.ReadHoldingRegisters(reg, 1)
+		if err != nil {
+			return err
+		}
+
+		val := wordToInt16(results)
+		mqttClient.Publish(topic+"/"+subtopic, 0, true, fmt.Sprintf("%02d:%02d", val/100, val%100)).Wait()
+
+		return nil
+	}
+}
+
+var chargeScheduleData [6]uint8
+
+func readChargeSchedule(index int) func(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	return func(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+		results, err := client.ReadHoldingRegisters(RegScheduleCharge1+uint16(index), 1)
+		if err != nil {
+			return err
+		}
+
+		chargeScheduleData[index] = results[0]
+
+		gridCharge := "OFF"
+		genCharge := "OFF"
+
+		log.Println("GRID/GEN charge for index", index, ":", uint(results[0]))
+
+		if (results[0] & 1) == 1 {
+			gridCharge = "ON"
+		}
+		if (results[0] & 2) == 2 {
+			genCharge = "ON"
+		}
+
+		mqttClient.Publish(fmt.Sprint(topic, "/schedule_grid_charge", index+1), 0, true, gridCharge).Wait()
+		mqttClient.Publish(fmt.Sprint(topic, "/schedule_gen_charge", index+1), 0, true, genCharge).Wait()
+
+		return nil
+	}
+}
+
 func readBool(subtopic string, reg uint16) func(client modbus.Client, mqttClient mqtt.Client, topic string) error {
 	return func(client modbus.Client, mqttClient mqtt.Client, topic string) error {
 		results, err := client.ReadHoldingRegisters(reg, 1)
@@ -264,6 +465,26 @@ func readBool(subtopic string, reg uint16) func(client modbus.Client, mqttClient
 
 		return nil
 	}
+}
+
+func readBatteryFirst(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegEnergyManagementModel, 1)
+	if err != nil {
+		return err
+	}
+
+	value := wordToUint16(results)
+	var valueStr string
+
+	if value == ManagementBatteryFirst {
+		valueStr = "ON"
+	} else {
+		valueStr = "OFF"
+	}
+
+	mqttClient.Publish(topic+"/battery_first", 0, true, valueStr).Wait()
+
+	return nil
 }
 
 func readBatteryVoltage(client modbus.Client, mqttClient mqtt.Client, topic string) error {
@@ -571,6 +792,75 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 	}
 	jsonBytes, _ = json.Marshal(&gridChargeSwitch)
 	mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+gridChargeSwitch.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	batteryFirstSwitch := HassAutoconfig{
+		Device:            autoconf.Device,
+		Name:              "battery_first",
+		AvailabilityTopic: topic + "/status",
+		StatusTopic:       topic + "/battery_first",
+		CommandTopic:      topic + "/battery_first_set",
+		UniqueID:          fmt.Sprint(topic, ".", hostname, ".battery_first"),
+	}
+	jsonBytes, _ = json.Marshal(&batteryFirstSwitch)
+	mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+batteryFirstSwitch.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	for i := 0; i < 6; i++ {
+		name := fmt.Sprint("schedule_time", i+1)
+		conf := HassAutoconfig{
+			Device:            autoconf.Device,
+			Name:              name,
+			AvailabilityTopic: topic + "/status",
+			StatusTopic:       topic + "/" + name,
+			CommandTopic:      topic + "/" + name + "_set",
+			UniqueID:          fmt.Sprint(topic, ".", hostname, ".", name),
+		}
+		jsonBytes, _ = json.Marshal(&conf)
+		mqttClient.Publish("homeassistant/text/inverter_"+hostname+"/"+conf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+		name = fmt.Sprint("schedule_soc", i+1)
+		min := 0
+		max := 100
+		conf = HassAutoconfig{
+			Device:            autoconf.Device,
+			Name:              name,
+			AvailabilityTopic: topic + "/status",
+			StatusTopic:       topic + "/" + name,
+			CommandTopic:      topic + "/" + name + "_set",
+			UniqueID:          fmt.Sprint(topic, ".", hostname, ".", name),
+			Min:               &min,
+			Max:               &max,
+		}
+		jsonBytes, _ = json.Marshal(&conf)
+		mqttClient.Publish("homeassistant/number/inverter_"+hostname+"/"+conf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+		name = fmt.Sprint("schedule_grid_charge", i+1)
+		conf = HassAutoconfig{
+			Device:            autoconf.Device,
+			Name:              name,
+			AvailabilityTopic: topic + "/status",
+			StatusTopic:       topic + "/" + name,
+			CommandTopic:      topic + "/" + name + "_set",
+			UniqueID:          fmt.Sprint(topic, ".", hostname, ".", name),
+		}
+		jsonBytes, _ = json.Marshal(&conf)
+		mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+conf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+		name = fmt.Sprint("schedule_gen_charge", i+1)
+		conf = HassAutoconfig{
+			Device:            autoconf.Device,
+			Name:              name,
+			AvailabilityTopic: topic + "/status",
+			StatusTopic:       topic + "/" + name,
+			CommandTopic:      topic + "/" + name + "_set",
+			UniqueID:          fmt.Sprint(topic, ".", hostname, ".", name),
+		}
+		jsonBytes, _ = json.Marshal(&conf)
+		mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+conf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+	}
 }
 
 func handleSetSolarSellPower(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
@@ -625,7 +915,7 @@ func handleSetInverterMode(client mqtt.Client, message mqtt.Message, modbusClien
 	}
 }
 
-func handleSetSolarSell(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
+func handleSetBatteryFirst(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
 	defer message.Ack()
 
 	text := string(message.Payload())
@@ -634,22 +924,22 @@ func handleSetSolarSell(client mqtt.Client, message mqtt.Message, modbusClient m
 
 	switch strings.ToLower(text) {
 	case "on":
-		value = 1
+		value = ManagementBatteryFirst
 	case "off":
-		value = 0
+		value = ManagementLoadFirst
 	default:
-		log.Println("handleSetSolarSell: Invalid value: " + text)
+		log.Println("handleSetBatteryFirst: Invalid value: " + text)
 		return
 	}
 
 	mutex.Lock()
-	_, err := modbusClient.WriteMultipleRegisters(RegSolarSell, 1, uint16ToWord(value))
+	_, err := modbusClient.WriteMultipleRegisters(RegEnergyManagementModel, 1, uint16ToWord(value))
 	mutex.Unlock()
 
 	if err != nil {
-		log.Println("handleSetSolarSell: Error writing register:", err)
+		log.Println("handleSetBatteryFirst: Error writing register:", err)
 	} else {
-		log.Println("handleSetSolarSell: write OK")
+		log.Println("handleSetBatteryFirst: write OK")
 	}
 }
 
