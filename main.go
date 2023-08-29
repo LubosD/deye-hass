@@ -252,10 +252,11 @@ func handleWriteChargeSchedule(client modbus.Client, mqttClient mqtt.Client, top
 			return
 		}
 
-		value |= chargeScheduleData[index] & 2
+		value |= chargeScheduleData[index] & 0xfe
+		log.Println("Writing", value, "to charge schedule index", index)
 
 		mutex.Lock()
-		_, err := client.WriteMultipleRegisters(RegScheduleCharge1+uint16(index), 1, []byte{value})
+		_, err := client.WriteMultipleRegisters(RegScheduleCharge1+uint16(index), 1, []byte{0, value})
 
 		if err == nil {
 			chargeScheduleData[index] = value
@@ -288,10 +289,11 @@ func handleWriteChargeSchedule(client modbus.Client, mqttClient mqtt.Client, top
 			return
 		}
 
-		value |= chargeScheduleData[index] & 1
+		value |= chargeScheduleData[index] & 0xfd
+		log.Println("Writing", value, "to charge schedule index", index)
 
 		mutex.Lock()
-		_, err := client.WriteMultipleRegisters(RegScheduleCharge1+uint16(index), 1, []byte{value})
+		_, err := client.WriteMultipleRegisters(RegScheduleCharge1+uint16(index), 1, []byte{0, value})
 
 		if err == nil {
 			chargeScheduleData[index] = value
@@ -424,17 +426,18 @@ func readChargeSchedule(index int) func(client modbus.Client, mqttClient mqtt.Cl
 			return err
 		}
 
-		chargeScheduleData[index] = results[0]
+		value := wordToUint16(results)
+		chargeScheduleData[index] = uint8(value)
 
 		gridCharge := "OFF"
 		genCharge := "OFF"
 
-		log.Println("GRID/GEN charge for index", index, ":", uint(results[0]))
+		log.Println("GRID/GEN charge for index", index, ":", uint(value))
 
-		if (results[0] & 1) == 1 {
+		if (value & 1) == 1 {
 			gridCharge = "ON"
 		}
-		if (results[0] & 2) == 2 {
+		if (value & 2) == 2 {
 			genCharge = "ON"
 		}
 
