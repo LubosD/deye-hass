@@ -61,10 +61,12 @@ func main() {
 		readInt("grid_power", RegGridPowerTotal),
 		readBool("solar_sell", RegSolarSell),
 		readBool("grid_charge", RegGridCharge),
+		readUint("grid_charge_current", RegGridChargeCurrent),
 		readBatteryVoltage,
 		readInverterPower,
 		readInverterMode,
-		readBatteryFirst,
+		readPowerManagement,
+		readActiveBalanceLoad,
 	}
 
 	for i := 0; i < 6; i++ {
@@ -129,6 +131,7 @@ func subscribeTopics(client modbus.Client, mqttClient mqtt.Client, topic string)
 		handleSetBatteryFirst(mc, message, client)
 	}).Wait()
 
+	handleWriteBool(client, mqttClient, topic+"/active_balance_load_set", RegActiveBalanceLoad)
 	handleWriteBool(client, mqttClient, topic+"/solar_sell_set", RegSolarSell)
 	handleWriteBool(client, mqttClient, topic+"/grid_charge_set", RegGridCharge)
 
@@ -137,6 +140,8 @@ func subscribeTopics(client modbus.Client, mqttClient mqtt.Client, topic string)
 		handleWriteTime(client, mqttClient, fmt.Sprint(topic, "/schedule_time", i+1, "_set"), RegScheduleTime1+uint16(i))
 		handleWriteChargeSchedule(client, mqttClient, topic, i)
 	}
+
+	handleWriteUint(client, mqttClient, topic+"/grid_charge_current_set", RegGridChargeCurrent)
 }
 
 func handleWriteBool(client modbus.Client, mqttClient mqtt.Client, topic string, reg uint16) {
@@ -470,7 +475,7 @@ func readBool(subtopic string, reg uint16) func(client modbus.Client, mqttClient
 	}
 }
 
-func readBatteryFirst(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+func readPowerManagement(client modbus.Client, mqttClient mqtt.Client, topic string) error {
 	results, err := client.ReadHoldingRegisters(RegEnergyManagementModel, 1)
 	if err != nil {
 		return err
@@ -484,8 +489,26 @@ func readBatteryFirst(client modbus.Client, mqttClient mqtt.Client, topic string
 	} else {
 		valueStr = "OFF"
 	}
-
 	mqttClient.Publish(topic+"/battery_first", 0, true, valueStr).Wait()
+
+	return nil
+}
+
+func readActiveBalanceLoad(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegActiveBalanceLoad, 1)
+	if err != nil {
+		return err
+	}
+
+	value := wordToUint16(results)
+	var valueStr string
+
+	if value == 1 {
+		valueStr = "ON"
+	} else {
+		valueStr = "OFF"
+	}
+	mqttClient.Publish(topic+"/active_balance_load", 0, true, valueStr).Wait()
 
 	return nil
 }
@@ -785,6 +808,19 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 
 	///
 
+	activeBalanceLoadSwitch := HassAutoconfig{
+		Device:            autoconf.Device,
+		Name:              "active_balance_load",
+		AvailabilityTopic: topic + "/status",
+		StatusTopic:       topic + "/active_balance_load",
+		CommandTopic:      topic + "/active_balance_load_set",
+		UniqueID:          fmt.Sprint(topic, ".", hostname, ".solaractive_balance_load_sell"),
+	}
+	jsonBytes, _ = json.Marshal(&activeBalanceLoadSwitch)
+	mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+activeBalanceLoadSwitch.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
 	gridChargeSwitch := HassAutoconfig{
 		Device:            autoconf.Device,
 		Name:              "grid_charge",
@@ -864,6 +900,24 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 		jsonBytes, _ = json.Marshal(&conf)
 		mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+conf.Name+"/config", 0, true, string(jsonBytes)).Wait()
 	}
+
+	///
+
+	min := 0
+	max := 100
+	confGC := HassAutoconfig{
+		Device:            autoconf.Device,
+		Name:              "grid_charge_current",
+		AvailabilityTopic: topic + "/status",
+		StatusTopic:       topic + "/grid_charge_current",
+		CommandTopic:      topic + "/grid_charge_current_set",
+		UniqueID:          fmt.Sprint(topic, ".", hostname, ".", "grid_charge_current_setting"),
+		Min:               &min,
+		Max:               &max,
+	}
+
+	jsonBytes, _ = json.Marshal(&confGC)
+	mqttClient.Publish("homeassistant/number/inverter_"+hostname+"/grid_charge_current/config", 0, true, string(jsonBytes)).Wait()
 }
 
 func handleSetSolarSellPower(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {

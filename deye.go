@@ -32,6 +32,8 @@ const (
 	RegScheduleTime1   uint16 = 148 // 1..6, 0000-2359
 	RegScheduleSoC1    uint16 = 166 // 1..6, 0-100%
 	RegScheduleCharge1 uint16 = 172 // 1..6, bit0=grid charge, bit1=gen charge
+
+	RegActiveBalanceLoad uint16 = 237
 )
 
 const (
@@ -41,6 +43,8 @@ const (
 	RegEnergyManagementModel uint16 = 141
 	RegLimitControlFunction  uint16 = 142
 	RegSolarSell             uint16 = 145
+
+	RegGridChargeCurrent uint16 = 128
 )
 
 // RegLimitControlFunction
@@ -54,5 +58,5 @@ const (
 const (
 	ManagementBatteryFirst uint16 = 0 // is this a bug in the documentation?
 	//ManagementBatteryFirst uint16 = 2 // <- this is what docs say
-	ManagementLoadFirst uint16 = 3
+	ManagementLoadFirst uint16 = 1
 )
