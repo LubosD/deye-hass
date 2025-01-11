@@ -67,6 +67,7 @@ func main() {
 		readInverterMode,
 		readPowerManagement,
 		readActiveBalanceLoad,
+		readGenGridSignal,
 	}
 
 	for i := 0; i < 6; i++ {
@@ -109,6 +110,7 @@ func main() {
 				log.Println("Inverter is not replying to our requests anymore")
 
 				mqttClient.Publish(*topicPtr+"/status", 0, true, "offline").Wait()
+				os.Exit(1)
 			}
 		}
 
@@ -494,6 +496,14 @@ func readPowerManagement(client modbus.Client, mqttClient mqtt.Client, topic str
 	return nil
 }
 
+func valueToBoolStr(value uint16) string {
+	if value != 0 {
+		return "ON"
+	} else {
+		return "OFF"
+	}
+}
+
 func readActiveBalanceLoad(client modbus.Client, mqttClient mqtt.Client, topic string) error {
 	results, err := client.ReadHoldingRegisters(RegActiveBalanceLoad, 1)
 	if err != nil {
@@ -501,14 +511,27 @@ func readActiveBalanceLoad(client modbus.Client, mqttClient mqtt.Client, topic s
 	}
 
 	value := wordToUint16(results)
-	var valueStr string
+	valueStr := valueToBoolStr(value)
 
-	if value == 1 {
-		valueStr = "ON"
-	} else {
-		valueStr = "OFF"
-	}
 	mqttClient.Publish(topic+"/active_balance_load", 0, true, valueStr).Wait()
+
+	return nil
+}
+
+func readGenGridSignal(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegAcRelay, 1)
+	if err != nil {
+		return err
+	}
+
+	value := wordToUint16(results)
+	log.Println("Gen/Grid signal:", value)
+	valueStr := valueToBoolStr(value & 4) // grid
+
+	mqttClient.Publish(topic+"/grid_signal", 0, true, valueStr).Wait()
+
+	//valueStr = valueToBoolStr(value & 2) // gen
+	//mqttClient.Publish(topic+"/gen_signal", 0, true, valueStr).Wait()
 
 	return nil
 }
@@ -904,7 +927,7 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 	///
 
 	min := 0
-	max := 100
+	max := 120
 	confGC := HassAutoconfig{
 		Device:            autoconf.Device,
 		Name:              "grid_charge_current",
@@ -918,6 +941,30 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 
 	jsonBytes, _ = json.Marshal(&confGC)
 	mqttClient.Publish("homeassistant/number/inverter_"+hostname+"/grid_charge_current/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	gridSignalSensor := HassAutoconfig{
+		Device:            autoconf.Device,
+		Name:              "grid_signal",
+		AvailabilityTopic: topic + "/status",
+		StatusTopic:       topic + "/grid_signal",
+		UniqueID:          fmt.Sprint(topic, ".", hostname, ".grid_signal"),
+	}
+	jsonBytes, _ = json.Marshal(&gridSignalSensor)
+	mqttClient.Publish("homeassistant/binary_sensor/inverter_"+hostname+"/"+gridSignalSensor.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	genSignalSensor := HassAutoconfig{
+		Device:            autoconf.Device,
+		Name:              "gen_signal",
+		AvailabilityTopic: topic + "/status",
+		StatusTopic:       topic + "/gen_signal",
+		UniqueID:          fmt.Sprint(topic, ".", hostname, ".gen_signal"),
+	}
+	jsonBytes, _ = json.Marshal(&genSignalSensor)
+	mqttClient.Publish("homeassistant/binary_sensor/inverter_"+hostname+"/"+genSignalSensor.Name+"/config", 0, true, string(jsonBytes)).Wait()
 }
 
 func handleSetSolarSellPower(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {

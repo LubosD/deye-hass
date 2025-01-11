@@ -45,6 +45,9 @@ const (
 	RegSolarSell             uint16 = 145
 
 	RegGridChargeCurrent uint16 = 128
+	RegGenGridSignal     uint16 = 140
+	RegAcRelay           uint16 = 552
+	RegExtRelayStatus    uint16 = 194
 )
 
 // RegLimitControlFunction
