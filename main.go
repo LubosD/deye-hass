@@ -53,11 +53,12 @@ func main() {
 		readDeciWh("total_battery_discharge", RegTotalBatteryDischargeLow),
 		readDeciWh("total_grid_buy", RegTotalGridBuyLow),
 		readDeciWh("total_grid_sell", RegTotalGridSellLow),
-		readUint("max_solar_sell_power", RegSolarSellPower),
+		readUint("max_solar_power", RegMaxSolarPower),
 		readUint("battery_capacity_pct", RegBatteryCapacity),
 		readInt("battery_power", RegBatteryPower),
 		readUint("backup_load_power", RegBackupLoadPowerTotal),
 		readUint("load_power", RegLoadPowerTotal),
+		readUint("max_sell_power", RegMaxSellPower),
 		readInt("grid_power", RegGridPowerTotal),
 		readBool("solar_sell", RegSolarSell),
 		readBool("grid_charge", RegGridCharge),
@@ -121,9 +122,9 @@ func main() {
 }
 
 func subscribeTopics(client modbus.Client, mqttClient mqtt.Client, topic string) {
-	mqttClient.Subscribe(topic+"/max_solar_sell_power_set", 0, func(mc mqtt.Client, message mqtt.Message) {
-		handleSetSolarSellPower(mc, message, client)
-	}).Wait()
+	//mqttClient.Subscribe(topic+"/max_solar_sell_power_set", 0, func(mc mqtt.Client, message mqtt.Message) {
+	//	handleSetSolarSellPower(mc, message, client)
+	//}).Wait()
 
 	mqttClient.Subscribe(topic+"/inverter_mode_set", 0, func(mc mqtt.Client, message mqtt.Message) {
 		handleSetInverterMode(mc, message, client)
@@ -144,6 +145,8 @@ func subscribeTopics(client modbus.Client, mqttClient mqtt.Client, topic string)
 	}
 
 	handleWriteUint(client, mqttClient, topic+"/grid_charge_current_set", RegGridChargeCurrent)
+	handleWriteUint(client, mqttClient, topic+"/max_solar_power_set", RegMaxSolarPower)
+	handleWriteUint(client, mqttClient, topic+"/max_sell_power_set", RegMaxSellPower)
 }
 
 func handleWriteBool(client modbus.Client, mqttClient mqtt.Client, topic string, reg uint16) {
@@ -746,7 +749,21 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 
 	///
 
-	autoconf.Name = "max_solar_sell_power"
+	autoconf.Name = "max_solar_power"
+	autoconf.StatusTopic = topic + "/" + autoconf.Name
+	autoconf.CommandTopic = autoconf.StatusTopic + "_set"
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+	autoconf.Max = intPtr(20000)
+	autoconf.Min = intPtr(0)
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/number/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+	autoconf.CommandTopic = ""
+	autoconf.Min = nil
+	autoconf.Max = nil
+
+	///
+
+	autoconf.Name = "max_sell_power"
 	autoconf.StatusTopic = topic + "/" + autoconf.Name
 	autoconf.CommandTopic = autoconf.StatusTopic + "_set"
 	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
@@ -967,6 +984,7 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 	mqttClient.Publish("homeassistant/binary_sensor/inverter_"+hostname+"/"+genSignalSensor.Name+"/config", 0, true, string(jsonBytes)).Wait()
 }
 
+/*
 func handleSetSolarSellPower(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
 	defer message.Ack()
 
@@ -989,6 +1007,7 @@ func handleSetSolarSellPower(client mqtt.Client, message mqtt.Message, modbusCli
 		log.Println("handleSetSolarSellPower: write OK")
 	}
 }
+*/
 
 func handleSetInverterMode(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
 	defer message.Ack()
