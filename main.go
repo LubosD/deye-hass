@@ -944,7 +944,7 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 	///
 
 	min := 0
-	max := 120
+	max := 180
 	confGC := HassAutoconfig{
 		Device:            autoconf.Device,
 		Name:              "grid_charge_current",
