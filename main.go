@@ -67,6 +67,7 @@ func main() {
 		readBatteryVoltage,
 		readInverterPower,
 		readInverterMode,
+		readGenPortUse,
 		readPowerManagement,
 		readActiveBalanceLoad,
 		readGenGridSignal,
@@ -133,6 +134,10 @@ func subscribeTopics(client modbus.Client, mqttClient mqtt.Client, topic string)
 
 	mqttClient.Subscribe(topic+"/battery_first_set", 0, func(mc mqtt.Client, message mqtt.Message) {
 		handleSetBatteryFirst(mc, message, client)
+	}).Wait()
+
+	mqttClient.Subscribe(topic+"/gen_port_use_set", 0, func(mc mqtt.Client, message mqtt.Message) {
+		handleSetGenPortUse(mc, message, client)
 	}).Wait()
 
 	handleWriteBool(client, mqttClient, topic+"/active_balance_load_set", RegActiveBalanceLoad)
@@ -280,7 +285,7 @@ func handleWriteChargeSchedule(client modbus.Client, mqttClient mqtt.Client, top
 		} else {
 			log.Println(topic + ": write OK")
 		}
-	})
+	}).Wait()
 
 	fulltopicGen := fmt.Sprint(topic, "/schedule_gen_charge", index+1, "_set")
 
@@ -317,7 +322,7 @@ func handleWriteChargeSchedule(client modbus.Client, mqttClient mqtt.Client, top
 		} else {
 			log.Println(topic + ": write OK")
 		}
-	})
+	}).Wait()
 }
 
 func lowHighToUint(regBytes []byte) uint32 {
@@ -574,6 +579,31 @@ func readInverterMode(client modbus.Client, mqttClient mqtt.Client, topic string
 	}
 
 	mqttClient.Publish(topic+"/inverter_mode", 0, true, valueStr).Wait()
+
+	return nil
+}
+
+func readGenPortUse(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegGenPortUse, 1)
+	if err != nil {
+		return err
+	}
+
+	value := wordToUint16(results)
+	var valueStr string
+
+	switch value {
+	case 0:
+		valueStr = GenPortUseGeneratorString
+	case 1:
+		valueStr = GenPortUseSmartLoadString
+	case 2:
+		valueStr = GenPortUseMicroinverterString
+	default:
+		valueStr = "UNKNOWN"
+	}
+
+	mqttClient.Publish(topic+"/gen_port_use", 0, true, valueStr).Wait()
 
 	return nil
 }
@@ -837,6 +867,24 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 
 	///
 
+	genPortUseSelect := HassAutoconfig{
+		Device:            autoconf.Device,
+		Name:              "gen_port_use",
+		AvailabilityTopic: topic + "/status",
+		StatusTopic:       topic + "/gen_port_use",
+		CommandTopic:      topic + "/gen_port_use_set",
+		UniqueID:          fmt.Sprint(topic, ".", hostname, ".gen_port_use"),
+		Ops: []string{
+			GenPortUseGeneratorString,
+			GenPortUseSmartLoadString,
+			GenPortUseMicroinverterString,
+		},
+	}
+	jsonBytes, _ = json.Marshal(&genPortUseSelect)
+	mqttClient.Publish("homeassistant/select/inverter_"+hostname+"/"+genPortUseSelect.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
 	solarSellSwitch := HassAutoconfig{
 		Device:            autoconf.Device,
 		Name:              "solar_sell",
@@ -1078,6 +1126,35 @@ func handleSetBatteryFirst(client mqtt.Client, message mqtt.Message, modbusClien
 		log.Println("handleSetBatteryFirst: Error writing register:", err)
 	} else {
 		log.Println("handleSetBatteryFirst: write OK")
+	}
+}
+
+func handleSetGenPortUse(client mqtt.Client, message mqtt.Message, modbusClient modbus.Client) {
+	defer message.Ack()
+
+	text := string(message.Payload())
+	var value uint16
+
+	switch text {
+	case GenPortUseGeneratorString:
+		value = 0
+	case GenPortUseSmartLoadString:
+		value = 1
+	case GenPortUseMicroinverterString:
+		value = 2
+	default:
+		log.Println("handleSetGenPortUse: Invalid value: " + text)
+		return
+	}
+
+	mutex.Lock()
+	_, err := modbusClient.WriteMultipleRegisters(RegGenPortUse, 1, uint16ToWord(value))
+	mutex.Unlock()
+
+	if err != nil {
+		log.Println("handleSetGenPortUse: Error writing register:", err)
+	} else {
+		log.Println("handleSetGenPortUse: write OK")
 	}
 }
 
