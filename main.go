@@ -61,6 +61,7 @@ func main() {
 		readUint("max_sell_power", RegMaxSellPower),
 		readInt("grid_power", RegGridPowerTotal),
 		readBool("solar_sell", RegSolarSell),
+		readBool("gen_charge", RegGenCharge),
 		readBool("grid_charge", RegGridCharge),
 		readUint("grid_charge_current", RegGridChargeCurrent),
 		readBatteryVoltage,
@@ -136,6 +137,7 @@ func subscribeTopics(client modbus.Client, mqttClient mqtt.Client, topic string)
 
 	handleWriteBool(client, mqttClient, topic+"/active_balance_load_set", RegActiveBalanceLoad)
 	handleWriteBool(client, mqttClient, topic+"/solar_sell_set", RegSolarSell)
+	handleWriteBool(client, mqttClient, topic+"/gen_charge_set", RegGenCharge)
 	handleWriteBool(client, mqttClient, topic+"/grid_charge_set", RegGridCharge)
 
 	for i := 0; i < 6; i++ {
@@ -871,6 +873,19 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 	}
 	jsonBytes, _ = json.Marshal(&gridChargeSwitch)
 	mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+gridChargeSwitch.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	genChargeSwitch := HassAutoconfig{
+		Device:            autoconf.Device,
+		Name:              "gen_charge",
+		AvailabilityTopic: topic + "/status",
+		StatusTopic:       topic + "/gen_charge",
+		CommandTopic:      topic + "/gen_charge_set",
+		UniqueID:          fmt.Sprint(topic, ".", hostname, ".gen_charge"),
+	}
+	jsonBytes, _ = json.Marshal(&genChargeSwitch)
+	mqttClient.Publish("homeassistant/switch/inverter_"+hostname+"/"+genChargeSwitch.Name+"/config", 0, true, string(jsonBytes)).Wait()
 
 	///
 

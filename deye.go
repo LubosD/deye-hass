@@ -39,6 +39,7 @@ const (
 const (
 	RegPowerEnable           uint16 = 80
 	RegMaxSolarPower         uint16 = 340
+	RegGenCharge             uint16 = 129
 	RegGridCharge            uint16 = 130
 	RegEnergyManagementModel uint16 = 141
 	RegLimitControlFunction  uint16 = 142
