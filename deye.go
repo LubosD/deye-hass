@@ -26,6 +26,11 @@ const (
 	RegInverterOutputPower3     uint16 = 635
 	RegInverterOutputPowerTotal uint16 = 636
 
+	RegGenPortPower1     uint16 = 664
+	RegGenPortPower2     uint16 = 665
+	RegGenPortPower3     uint16 = 666
+	RegGenPortPowerTotal uint16 = 667
+
 	RegBackupLoadPowerTotal uint16 = 643
 	RegLoadPowerTotal       uint16 = 653
 

@@ -66,6 +66,7 @@ func main() {
 		readUint("grid_charge_current", RegGridChargeCurrent),
 		readBatteryVoltage,
 		readInverterPower,
+		readGenPower,
 		readInverterMode,
 		readGenPortUse,
 		readPowerManagement,
@@ -625,6 +626,23 @@ func readInverterPower(client modbus.Client, mqttClient mqtt.Client, topic strin
 	return nil
 }
 
+func readGenPower(client modbus.Client, mqttClient mqtt.Client, topic string) error {
+	results, err := client.ReadHoldingRegisters(RegGenPortPower1, 4)
+	if err != nil {
+		return err
+	}
+
+	for i := 1; i <= 3; i++ {
+		watts := wordToInt16(results[i*2-2 : i*2])
+		mqttClient.Publish(fmt.Sprint(topic, "/gen_power_l", i), 0, true, fmt.Sprint(watts)).Wait()
+	}
+
+	totalWatts := wordToInt16(results[6:])
+	mqttClient.Publish(topic+"/gen_power_all", 0, true, fmt.Sprint(totalWatts)).Wait()
+
+	return nil
+}
+
 func connectMqtt(address, topic string, modbusClient modbus.Client) mqtt.Client {
 	opts := mqtt.NewClientOptions().
 		AddBroker(address).
@@ -810,6 +828,26 @@ func pushHomeAssistantConfig(mqttClient mqtt.Client, topic string) {
 	///
 
 	autoconf.Name = "pv_power_all"
+	autoconf.StatusTopic = topic + "/" + autoconf.Name
+	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+	jsonBytes, _ = json.Marshal(&autoconf)
+	mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+
+	///
+
+	for i := 1; i <= 3; i++ {
+		autoconf.Name = fmt.Sprint("gen_power_l", i)
+		autoconf.DeviceClass = "power"
+		autoconf.StateClass = "measurement"
+		autoconf.UnitOfMeasurement = "W"
+		autoconf.StatusTopic = topic + "/" + autoconf.Name
+		autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
+
+		jsonBytes, _ = json.Marshal(&autoconf)
+		mqttClient.Publish("homeassistant/sensor/inverter_"+hostname+"/"+autoconf.Name+"/config", 0, true, string(jsonBytes)).Wait()
+	}
+
+	autoconf.Name = "gen_power_all"
 	autoconf.StatusTopic = topic + "/" + autoconf.Name
 	autoconf.UniqueID = fmt.Sprint(topic, ".", hostname, ".", autoconf.Name)
 	jsonBytes, _ = json.Marshal(&autoconf)
